@@ -61,13 +61,31 @@ if [[ -z "$DefaultPrompt" ]]; then
 fi
 
 # Download subtitles using yt-dlp
-base="$(yt-dlp --skip-download --write-auto-sub --sub-format vtt --output '%(title)s' "$URL" 2>/dev/null)"
-sub_file="${base}.en.vtt"
+title="$(yt-dlp --print '%(title)s' "$URL" 2>/dev/null)"
+lang="$(yt-dlp --print '%(language)s' "$URL" 2>/dev/null)"
+
+if [[ -z "$lang" || "$lang" == "None" ]]; then
+  lang="en"
+fi
+
+# try official subtitles first
+yt-dlp --quiet --skip-download --write-sub --sub-lang "$lang" --sub-format vtt \
+  --output '%(title)s' "$URL" >/dev/null 2>&1
+
+sub_file="${title}.${lang}.vtt"
+
+if [[ ! -f "$sub_file" ]]; then
+  # fallback to automatic captions in the video's language
+  yt-dlp --quiet --skip-download --write-auto-sub --sub-lang "$lang" --sub-format vtt \
+    --output '%(title)s' "$URL" >/dev/null 2>&1
+fi
 
 if [[ ! -f "$sub_file" ]]; then
   echo "Failed to download subtitles with yt-dlp"
   exit 1
 fi
+
+base="$title"
 
 # Convert VTT to plain text
 transcript_file="${base}.txt"

@@ -4,7 +4,7 @@
 
 ## How it works
 
-1. The script uses `yt-dlp` to fetch the auto-generated subtitles of the provided YouTube URL.
+1. The script uses `yt-dlp` to download the official subtitles in the video's language if available, otherwise it falls back to the auto-generated captions.
 2. The subtitle file is converted to plain text.
 3. The text is sent to the OpenAI API together with a prompt stored in the configuration file.
 4. The returned summary is saved as a time stamped text file next to the downloaded subtitle.
