@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+
+VERSION="1.0.0"
+
+CONFIG_FILE="$HOME/.config/yt-summarizer.conf"
+
+usage() {
+  echo "yt-summarizer $VERSION"
+  echo "Usage: yt-summarizer <youtube url>"
+}
+
+init_config() {
+  mkdir -p "$(dirname "$CONFIG_FILE")"
+  cat > "$CONFIG_FILE" <<'EOC'
+OpenAIAPIKey=
+OpenAIModel=gpt-3.5-turbo
+DefaultPrompt="This is a YouTube transcription text. Create a summary of this transcription in the language of the transcription. Make the text look like it was written by a human. Be serious, but use a casual tone, focusing on the important aspects of the text. Add timestamps and a brief title (between parenthesis) about the paragraph subject before each paragraph."
+EOC
+  echo "Configuration file created at $CONFIG_FILE"
+  echo "Please edit this file and set OpenAIAPIKey before running the script again."
+}
+
+if [[ "$1" == "-h" || "$1" == "--help" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ "$1" == "-v" || "$1" == "--version" ]]; then
+  echo "$VERSION"
+  exit 0
+fi
+
+if [[ -z "$1" ]]; then
+  usage
+  exit 1
+fi
+
+URL="$1"
+
+if [[ ! -f "$CONFIG_FILE" ]]; then
+  init_config
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+source "$CONFIG_FILE"
+
+if [[ -z "$OpenAIAPIKey" ]]; then
+  echo "OpenAIAPIKey is not set in $CONFIG_FILE"
+  exit 1
+fi
+
+if [[ -z "$OpenAIModel" ]]; then
+  echo "OpenAIModel is not set in $CONFIG_FILE"
+  exit 1
+fi
+
+if [[ -z "$DefaultPrompt" ]]; then
+  echo "DefaultPrompt is not set in $CONFIG_FILE"
+  exit 1
+fi
+
+# Download subtitles using yt-dlp
+base="$(yt-dlp --skip-download --write-auto-sub --sub-format vtt --output '%(title)s' "$URL" 2>/dev/null)"
+sub_file="${base}.en.vtt"
+
+if [[ ! -f "$sub_file" ]]; then
+  echo "Failed to download subtitles with yt-dlp"
+  exit 1
+fi
+
+# Convert VTT to plain text
+transcript_file="${base}.txt"
+sed -e 's/^WEBVTT.*//' -e 's/^[0-9]\+\s\+[0-9:,]\+ --> [0-9:,]\+\s*$//' -e '/^$/d' "$sub_file" > "$transcript_file"
+
+TRANSCRIPT=$(cat "$transcript_file")
+
+json_payload=$(jq -n --arg model "$OpenAIModel" --arg prompt "$DefaultPrompt" --arg text "$TRANSCRIPT" '{model:$model,messages:[{"role":"user","content":($prompt+"\n\n"+$text)}]}')
+
+response=$(curl -sS https://api.openai.com/v1/chat/completions \
+  -H "Authorization: Bearer $OpenAIAPIKey" \
+  -H 'Content-Type: application/json' \
+  -d "$json_payload")
+
+summary=$(echo "$response" | jq -r '.choices[0].message.content')
+
+timestamp=$(date +%F_%H-%M-%S)
+output_file="${base}_${timestamp}.txt"
+
+echo "$summary" > "$output_file"
+
+echo "Summary written to $output_file"
+

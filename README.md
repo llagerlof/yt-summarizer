@@ -1,35 +1,39 @@
 # yt-summarizer
-YouTube Summarizer
 
-This is a shell script (bash) that generates a summarized version of the transcription of an YouTube video.
+`yt-summarizer` is a small Bash script that downloads the transcript of a YouTube video and creates a concise summary using the OpenAI API.
 
 ## How it works
 
-It uses the cli program yt-dlp to download the transcription and use the OpenAI API to generate the summary.
+1. The script uses `yt-dlp` to fetch the auto-generated subtitles of the provided YouTube URL.
+2. The subtitle file is converted to plain text.
+3. The text is sent to the OpenAI API together with a prompt stored in the configuration file.
+4. The returned summary is saved as a time stamped text file next to the downloaded subtitle.
 
 ## Configuration file
 
-The configuration file 'yt-summarizer.conf' contains the:
+On the first run the script creates a configuration file at `~/.config/yt-summarizer.conf` if it does not exist. The file contains the following variables:
 
-- OpenAIAPIKey
-- OpenAIModel
-- DefaultPrompt
+- `OpenAIAPIKey` – your OpenAI API key
+- `OpenAIModel` – model name used in the API call (e.g. `gpt-3.5-turbo`)
+- `DefaultPrompt` – default prompt prepended to the transcript before sending it to the API
 
-Example (the key here is an invalid key, for example purposes):
-```
+Example configuration (the key is invalid and shown only for reference):
+
+```ini
 OpenAIAPIKey=sk-proj-N4TEodyvIqw7tFy3SnGeT3BlbkFJUDY4Te3pWuM9XCHYyxLe
 OpenAIModel=gpt-4.1-nano
 DefaultPrompt=This is a YouTube transcription text. Create a summary of this transcription in the language of the transcription. Make the text look like it was written by a human. Be serious, but use a casual tone, focusing on the important aspects of the text. Add timestamps and a brief title (between parenthesis) about the paragraph subject before each paragraph.
 ```
 
-## First time run
+If the file is created automatically the `OpenAIAPIKey` value is left blank. Edit the file and add your key before running the script again.
 
-When executing the script for the first time, create the configuration file above in ~/.config directory with the OpenAIModel and DefaultPrompt (leaving OpenAIAPIKey blank) and tell the user he must configure at least the OpenAIAPIKey.
+## Usage
 
-## Usage (after fully configured)
-
-```
-$ yt-summarizer https://www.youtube.com/watch?v=7bgQcvXT9uc
+```bash
+$ yt-summarizer <youtube-url>
 ```
 
-The final result is the generated summary in text format: <video title>_YYYY-MM-DD_hh-mm-ss.txt
+The summary is written to `<video title>_YYYY-MM-DD_hh-mm-ss.txt`.
+
+Run `yt-summarizer -h` to show a short help message or `yt-summarizer -v` to print the script version.
+
