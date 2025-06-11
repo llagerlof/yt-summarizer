@@ -3,6 +3,16 @@
 VERSION="1.0.0"
 
 CONFIG_FILE="$HOME/.config/yt-summarizer.conf"
+LOG_FILE="./yt-summarizer.log"
+
+# Function to log messages with timestamp
+log() {
+  local level="$1"
+  shift
+  local message="$*"
+  local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+  echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE" >&2
+}
 
 usage() {
   echo "yt-summarizer $VERSION"
@@ -20,6 +30,16 @@ EOC
   echo "Please edit this file and set OpenAIAPIKey before running the script again."
 }
 
+# Function to clean up temporary files
+cleanup() {
+  log "INFO" "Cleaning up temporary files..."
+  # Only remove VTT files, keep the transcript and summary files
+  rm -f *.vtt 2>/dev/null || true
+}
+
+# Set up cleanup trap
+trap cleanup EXIT
+
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
   usage
   exit 0
@@ -36,8 +56,10 @@ if [[ -z "$1" ]]; then
 fi
 
 URL="$1"
+log "INFO" "Starting yt-summarizer for URL: $URL"
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
+  log "ERROR" "Config file not found, initializing..."
   init_config
   exit 1
 fi
@@ -46,66 +68,208 @@ fi
 source "$CONFIG_FILE"
 
 if [[ -z "$OpenAIAPIKey" ]]; then
-  echo "OpenAIAPIKey is not set in $CONFIG_FILE"
+  log "ERROR" "OpenAIAPIKey is not set in $CONFIG_FILE"
   exit 1
 fi
 
 if [[ -z "$OpenAIModel" ]]; then
-  echo "OpenAIModel is not set in $CONFIG_FILE"
+  log "ERROR" "OpenAIModel is not set in $CONFIG_FILE"
   exit 1
 fi
 
 if [[ -z "$DefaultPrompt" ]]; then
-  echo "DefaultPrompt is not set in $CONFIG_FILE"
+  log "ERROR" "DefaultPrompt is not set in $CONFIG_FILE"
   exit 1
 fi
 
-# Download subtitles using yt-dlp
+# Get video information
+log "INFO" "Fetching video information..."
 title="$(yt-dlp --print '%(title)s' "$URL" 2>/dev/null)"
-lang="$(yt-dlp --print '%(language)s' "$URL" 2>/dev/null)"
+if [[ -z "$title" ]]; then
+  log "ERROR" "Failed to get video title. URL might be invalid or yt-dlp failed."
+  exit 1
+fi
 
+lang="$(yt-dlp --print '%(language)s' "$URL" 2>/dev/null)"
 if [[ -z "$lang" || "$lang" == "None" ]]; then
   lang="en"
+  log "INFO" "Video language not detected, defaulting to English"
+else
+  log "INFO" "Video language detected as: $lang"
 fi
 
-# try official subtitles first
-yt-dlp --quiet --skip-download --write-sub --sub-lang "$lang" --sub-format vtt \
-  --output '%(title)s' "$URL" >/dev/null 2>&1
+log "INFO" "Video title: $title"
 
-sub_file="${title}.${lang}.vtt"
+# Function to try downloading subtitles
+download_subtitles() {
+  local sub_type="$1"  # "official" or "auto"
+  local sub_lang="$2"
+  local attempt_desc="$3"
+  
+  log "INFO" "Attempting to download $attempt_desc..."
+  
+  # Store the count of .vtt files before download
+  local vtt_count_before=$(ls *.vtt 2>/dev/null | wc -l)
+  log "INFO" "VTT files before download: $vtt_count_before"
+  
+  local cmd_result=0
+  if [[ "$sub_type" == "official" ]]; then
+    yt-dlp --quiet --skip-download --write-sub --sub-lang "$sub_lang" --sub-format vtt \
+      --output '%(title)s' "$URL" 2>>"$LOG_FILE" || cmd_result=$?
+  else
+    yt-dlp --quiet --skip-download --write-auto-sub --sub-lang "$sub_lang" --sub-format vtt \
+      --output '%(title)s' "$URL" 2>>"$LOG_FILE" || cmd_result=$?
+  fi
+  
+  log "INFO" "yt-dlp command result: $cmd_result"
+  
+  # Check if new .vtt files were created
+  local vtt_count_after=$(ls *.vtt 2>/dev/null | wc -l)
+  log "INFO" "VTT files after download: $vtt_count_after"
+  
+  if [[ $vtt_count_after -gt $vtt_count_before ]]; then
+    # Find the most recently created .vtt file
+    local newest_file=$(ls -t *.vtt 2>/dev/null | head -1)
+    if [[ -n "$newest_file" && -f "$newest_file" ]]; then
+      log "INFO" "Successfully downloaded subtitles: $newest_file"
+      echo "$newest_file"
+      return 0
+    fi
+  fi
+  
+  log "WARN" "Failed to download $attempt_desc"
+  return 1
+}
 
-if [[ ! -f "$sub_file" ]]; then
-  # fallback to automatic captions in the video's language
-  yt-dlp --quiet --skip-download --write-auto-sub --sub-lang "$lang" --sub-format vtt \
-    --output '%(title)s' "$URL" >/dev/null 2>&1
+# Try to download subtitles with fallback strategy
+log "INFO" "Starting subtitle download with fallback strategy..."
+
+sub_file=""
+
+# 1. Try official subtitles in video language
+if [[ -z "$sub_file" ]]; then
+  log "INFO" "Trying attempt 1: official subtitles"
+  sub_file=$(download_subtitles "official" "$lang" "official subtitles in $lang")
+  log "INFO" "Attempt 1 result: sub_file='$sub_file'"
 fi
 
-if [[ ! -f "$sub_file" ]]; then
-  echo "Failed to download subtitles with yt-dlp"
+# 2. Try auto-generated subtitles in video language
+if [[ -z "$sub_file" ]]; then
+  log "INFO" "Trying attempt 2: auto-generated subtitles in $lang"
+  sub_file=$(download_subtitles "auto" "$lang" "auto-generated subtitles in $lang")
+  log "INFO" "Attempt 2 result: sub_file='$sub_file'"
+fi
+
+# 2b. If language is pt-BR, also try pt and pt-orig
+if [[ -z "$sub_file" && "$lang" == "pt-BR" ]]; then
+  log "INFO" "Trying attempt 3: Portuguese subtitles"
+  sub_file=$(download_subtitles "auto" "pt" "auto-generated Portuguese subtitles")
+  log "INFO" "Attempt 3 result: sub_file='$sub_file'"
+fi
+
+if [[ -z "$sub_file" && "$lang" == "pt-BR" ]]; then
+  log "INFO" "Trying attempt 4: Portuguese original subtitles"
+  sub_file=$(download_subtitles "auto" "pt-orig" "auto-generated Portuguese original subtitles")
+  log "INFO" "Attempt 4 result: sub_file='$sub_file'"
+fi
+
+# 3. Try auto-generated English subtitles if video language is not English
+if [[ -z "$sub_file" && "$lang" != "en" ]]; then
+  log "INFO" "Trying attempt 5: English subtitles"
+  sub_file=$(download_subtitles "auto" "en" "auto-generated English subtitles")
+  log "INFO" "Attempt 5 result: sub_file='$sub_file'"
+fi
+
+# 4. Final check - list all .vtt files and try to use any available
+if [[ -z "$sub_file" ]]; then
+  log "INFO" "Checking for any available subtitle files..."
+  vtt_files=(*.vtt)
+  if [[ -f "${vtt_files[0]}" ]]; then
+    sub_file="${vtt_files[0]}"
+    log "INFO" "Found subtitle file: $sub_file"
+  fi
+fi
+
+if [[ -z "$sub_file" || ! -f "$sub_file" ]]; then
+  log "ERROR" "Failed to download any subtitles. Available subtitle languages might be:"
+  yt-dlp --list-subs "$URL" 2>>"$LOG_FILE" | tee -a "$LOG_FILE" || true
   exit 1
 fi
+
+log "INFO" "Using subtitle file: $sub_file"
 
 base="$title"
 
 # Convert VTT to plain text
 transcript_file="${base}.txt"
-sed -e 's/^WEBVTT.*//' -e 's/^[0-9]\+\s\+[0-9:,]\+ --> [0-9:,]\+\s*$//' -e '/^$/d' "$sub_file" > "$transcript_file"
+log "INFO" "Converting VTT to plain text: $transcript_file"
+
+# Improved VTT parsing to handle various VTT formats
+sed -e '1s/^WEBVTT.*//' \
+    -e '/^Kind:/d' \
+    -e '/^Language:/d' \
+    -e '/^[0-9]\+$/d' \
+    -e '/^[0-9:.,]\+ --> [0-9:.,]\+.*$/d' \
+    -e '/^NOTE /d' \
+    -e '/^STYLE /d' \
+    -e '/^<[^>]*>/d' \
+    -e 's/<[^>]*>//g' \
+    -e '/^[[:space:]]*$/d' \
+    "$sub_file" > "$transcript_file"
+
+# Check if transcript is not empty
+if [[ ! -s "$transcript_file" ]]; then
+  log "ERROR" "Transcript file is empty after conversion. VTT file might be corrupted."
+  log "INFO" "VTT file contents:"
+  head -20 "$sub_file" | tee -a "$LOG_FILE"
+  exit 1
+fi
+
+transcript_size=$(wc -c < "$transcript_file")
+log "INFO" "Transcript size: $transcript_size characters"
+
+if [[ $transcript_size -lt 50 ]]; then
+  log "WARN" "Transcript seems very short, this might indicate a problem"
+fi
 
 TRANSCRIPT=$(cat "$transcript_file")
+log "INFO" "Creating OpenAI API request..."
 
 json_payload=$(jq -n --arg model "$OpenAIModel" --arg prompt "$DefaultPrompt" --arg text "$TRANSCRIPT" '{model:$model,messages:[{"role":"user","content":($prompt+"\n\n"+$text)}]}')
 
+log "INFO" "Sending request to OpenAI API..."
 response=$(curl -sS https://api.openai.com/v1/chat/completions \
   -H "Authorization: Bearer $OpenAIAPIKey" \
   -H 'Content-Type: application/json' \
-  -d "$json_payload")
+  -d "$json_payload" 2>>"$LOG_FILE")
+
+if [[ -z "$response" ]]; then
+  log "ERROR" "Empty response from OpenAI API"
+  exit 1
+fi
+
+# Check for API errors
+if echo "$response" | jq -e '.error' >/dev/null 2>&1; then
+  error_message=$(echo "$response" | jq -r '.error.message')
+  log "ERROR" "OpenAI API error: $error_message"
+  exit 1
+fi
 
 summary=$(echo "$response" | jq -r '.choices[0].message.content')
+
+if [[ -z "$summary" || "$summary" == "null" ]]; then
+  log "ERROR" "Failed to extract summary from API response"
+  log "INFO" "API response: $response"
+  exit 1
+fi
 
 timestamp=$(date +%F_%H-%M-%S)
 output_file="${base}_${timestamp}.txt"
 
 echo "$summary" > "$output_file"
+log "INFO" "Summary written to: $output_file"
 
+echo "Transcript written to $transcript_file"
 echo "Summary written to $output_file"
+log "INFO" "yt-summarizer completed successfully"
 
