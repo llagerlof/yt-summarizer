@@ -22,7 +22,7 @@ Example configuration (the key is invalid and shown only for reference):
 ```ini
 OpenAIAPIKey=sk-proj-N4TEodyvIqw7tFy3SnGeT3BlbkFJUDY4Te3pWuM9XCHYyxLe
 OpenAIModel=gpt-4.1-nano
-DefaultPrompt=This is a YouTube transcription text. Create a summary of this transcription in the language of the transcription. Make the text look like it was written by a human. Be serious, but use a casual tone, focusing on the important aspects of the text. Add timestamps and a brief title (between parenthesis) about the paragraph subject before each paragraph.
+DefaultPrompt="This is a YouTube transcription text. Create a summary of this transcription in the language of the transcription. Make the text look like it was written by a human. Be serious but use a casual tone, focus on the important aspects of the text. Add timestamps [hh:mm] and a brief title about the paragraph subject before each paragraph. Write the summary in english."
 ```
 
 If the file is created automatically the `OpenAIAPIKey` value is left blank. Edit the file and add your key before running the script again.
@@ -30,10 +30,15 @@ If the file is created automatically the `OpenAIAPIKey` value is left blank. Edi
 ## Usage
 
 ```bash
-$ yt-summarizer <youtube-url>
+$ yt-summarizer [-e] <youtube-url>
 ```
 
 The summary is written to `<video title>_YYYY-MM-DD_hh-mm-ss.txt`.
+
+Options:
+- `-e`   Open the summary file with an editor after generation
+- `-h`   Show a short help message
+- `-v`   Print the script version
 
 Run `yt-summarizer -h` to show a short help message or `yt-summarizer -v` to print the script version.
 
