@@ -67,7 +67,7 @@ init_config() {
   cat > "$CONFIG_FILE" <<'EOC'
 OpenAIAPIKey=
 OpenAIModel=gpt-3.5-turbo
-DefaultPrompt="This is a YouTube transcription text. Create a summary of this transcription in the language of the transcription. Make the text look like it was written by a human. Be serious but use a casual tone, focus on the important aspects of the text. Add timestamps [hh:mm] and a brief title about the paragraph subject before each paragraph."
+DefaultPrompt="This is a YouTube transcription text. Create a summary of this transcription in the language of the transcription. Make the text look like it was written by a human. Be serious but use a casual tone, focus on the important aspects of the text. Add timestamps [hh:mm] and a brief title about the paragraph subject before each paragraph. Write the summary in english."
 EOC
   echo "Configuration file created at $CONFIG_FILE"
   echo "Please edit this file and set OpenAIAPIKey before running the script again."
@@ -200,30 +200,29 @@ if [[ -z "$sub_file" ]]; then
   log "INFO" "Attempt 1 result: sub_file='$sub_file'"
 fi
 
-# 2. Try auto-generated subtitles in video language
+# 2. Try auto-generated subtitles in preferred languages first
 if [[ -z "$sub_file" ]]; then
-  log "INFO" "Trying attempt 2: auto-generated subtitles in $lang"
-  sub_file=$(download_subtitles "auto" "$lang" "auto-generated subtitles in $lang")
+  log "INFO" "Trying attempt 2: auto-generated English subtitles"
+  sub_file=$(download_subtitles "auto" "en" "auto-generated English subtitles")
   log "INFO" "Attempt 2 result: sub_file='$sub_file'"
 fi
 
-# 2b. If language is pt-BR, also try pt and pt-orig
-if [[ -z "$sub_file" && "$lang" == "pt-BR" ]]; then
-  log "INFO" "Trying attempt 3: Portuguese subtitles"
-  sub_file=$(download_subtitles "auto" "pt" "auto-generated Portuguese subtitles")
+if [[ -z "$sub_file" ]]; then
+  log "INFO" "Trying attempt 3: auto-generated Brazilian Portuguese subtitles"
+  sub_file=$(download_subtitles "auto" "pt-BR" "auto-generated Brazilian Portuguese subtitles")
   log "INFO" "Attempt 3 result: sub_file='$sub_file'"
 fi
 
-if [[ -z "$sub_file" && "$lang" == "pt-BR" ]]; then
-  log "INFO" "Trying attempt 4: Portuguese original subtitles"
-  sub_file=$(download_subtitles "auto" "pt-orig" "auto-generated Portuguese original subtitles")
+if [[ -z "$sub_file" ]]; then
+  log "INFO" "Trying attempt 4: auto-generated European Portuguese subtitles"
+  sub_file=$(download_subtitles "auto" "pt" "auto-generated European Portuguese subtitles")
   log "INFO" "Attempt 4 result: sub_file='$sub_file'"
 fi
 
-# 3. Try auto-generated English subtitles if video language is not English
-if [[ -z "$sub_file" && "$lang" != "en" ]]; then
-  log "INFO" "Trying attempt 5: English subtitles"
-  sub_file=$(download_subtitles "auto" "en" "auto-generated English subtitles")
+# 3. Try auto-generated subtitles in video language if not already tried
+if [[ -z "$sub_file" && "$lang" != "en" && "$lang" != "pt-BR" && "$lang" != "pt" ]]; then
+  log "INFO" "Trying attempt 5: auto-generated subtitles in $lang"
+  sub_file=$(download_subtitles "auto" "$lang" "auto-generated subtitles in $lang")
   log "INFO" "Attempt 5 result: sub_file='$sub_file'"
 fi
 
