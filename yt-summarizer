@@ -4,6 +4,7 @@ VERSION="1.0.0"
 
 CONFIG_FILE="$HOME/.config/yt-summarizer.conf"
 LOG_FILE="./yt-summarizer.log"
+OPEN_EDITOR=false
 
 # Function to log messages with timestamp
 log() {
@@ -16,7 +17,49 @@ log() {
 
 usage() {
   echo "yt-summarizer $VERSION"
-  echo "Usage: yt-summarizer <youtube url>"
+  echo "Usage: yt-summarizer [-e] <youtube url>"
+  echo "Options:"
+  echo "  -e    Open the summary file with an editor after generation"
+  echo "  -h    Show this help message"
+  echo "  -v    Show version"
+}
+
+# Function to check if running in a graphical environment
+is_graphical() {
+  [[ -n "$DISPLAY" || -n "$WAYLAND_DISPLAY" ]]
+}
+
+# Function to try opening file with an editor
+open_with_editor() {
+  local file="$1"
+  local editors=()
+  
+  # Add desktop editors if in graphical environment
+  if is_graphical; then
+    editors+=(kate kwrite gnome-text-editor)
+  fi
+  
+  # Add CLI editors
+  editors+=(nvim vim vi less)
+  
+  # Try each editor
+  for editor in "${editors[@]}"; do
+    if command -v "$editor" >/dev/null 2>&1; then
+      log "INFO" "Opening file with $editor"
+      case "$editor" in
+        less)
+          "$editor" "$file"
+          ;;
+        *)
+          "$editor" "$file" &
+          ;;
+      esac
+      return 0
+    fi
+  done
+  
+  log "WARN" "No suitable editor found"
+  return 1
 }
 
 init_config() {
@@ -49,6 +92,11 @@ fi
 if [[ "$1" == "-v" || "$1" == "--version" ]]; then
   echo "$VERSION"
   exit 0
+fi
+
+if [[ "$1" == "-e" ]]; then
+  OPEN_EDITOR=true
+  shift
 fi
 
 if [[ -z "$1" ]]; then
@@ -267,4 +315,9 @@ log "INFO" "Summary written to: $output_file"
 echo "Original VTT file: $sub_file"
 echo "Summary written to $output_file"
 log "INFO" "yt-summarizer completed successfully"
+
+# Open the file with an editor if requested
+if [[ "$OPEN_EDITOR" == "true" ]]; then
+  open_with_editor "$output_file"
+fi
 
