@@ -24,7 +24,7 @@ init_config() {
   cat > "$CONFIG_FILE" <<'EOC'
 OpenAIAPIKey=
 OpenAIModel=gpt-3.5-turbo
-DefaultPrompt="This is a YouTube transcription text. Create a summary of this transcription in the language of the transcription. Make the text look like it was written by a human. Be serious, but use a casual tone, focusing on the important aspects of the text. Add timestamps and a brief title (between parenthesis) about the paragraph subject before each paragraph."
+DefaultPrompt="This is a YouTube transcription text. Create a summary of this transcription in the language of the transcription. Make the text look like it was written by a human. Be serious but use a casual tone, focus on the important aspects of the text. Add timestamps [hh:mm] and a brief title about the paragraph subject before each paragraph."
 EOC
   echo "Configuration file created at $CONFIG_FILE"
   echo "Please edit this file and set OpenAIAPIKey before running the script again."
@@ -115,11 +115,9 @@ download_subtitles() {
   
   local cmd_result=0
   if [[ "$sub_type" == "official" ]]; then
-    yt-dlp --quiet --skip-download --write-sub --sub-lang "$sub_lang" --sub-format vtt \
-      --output '%(title)s' "$URL" 2>>"$LOG_FILE" || cmd_result=$?
+    yt-dlp --skip-download --write-sub --sub-lang "$sub_lang" --convert-subs vtt -o "%(title)s.%(ext)s" "$URL" >/dev/null 2>>"$LOG_FILE" || cmd_result=$?
   else
-    yt-dlp --quiet --skip-download --write-auto-sub --sub-lang "$sub_lang" --sub-format vtt \
-      --output '%(title)s' "$URL" 2>>"$LOG_FILE" || cmd_result=$?
+    yt-dlp --skip-download --write-auto-sub --sub-lang "$sub_lang" --convert-subs vtt -o "%(title)s.%(ext)s" "$URL" >/dev/null 2>>"$LOG_FILE" || cmd_result=$?
   fi
   
   log "INFO" "yt-dlp command result: $cmd_result"
