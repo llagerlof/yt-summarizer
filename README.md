@@ -14,7 +14,7 @@
 On the first run the script creates a configuration file at `~/.config/yt-summarizer.conf` if it does not exist. The file contains the following variables:
 
 - `OpenAIAPIKey` – your OpenAI API key
-- `OpenAIModel` – model name used in the API call (e.g. `gpt-3.5-turbo`)
+- `OpenAIModel` – model name used in the API call (e.g. `gpt-4.1-nano`)
 - `DefaultPrompt` – default prompt prepended to the transcript before sending it to the API
 
 Example configuration (the key is invalid and shown only for reference):
@@ -22,7 +22,7 @@ Example configuration (the key is invalid and shown only for reference):
 ```ini
 OpenAIAPIKey=sk-proj-N4TEodyvIqw7tFy3SnGeT3BlbkFJUDY4Te3pWuM9XCHYyxLe
 OpenAIModel=gpt-4.1-nano
-DefaultPrompt="This is a YouTube transcription text. Create a summary of this transcription in the language of the transcription. Make the text look like it was written by a human. Be serious but use a casual tone, focus on the important aspects of the text. Add timestamps [hh:mm] and a brief title about the paragraph subject before each paragraph. Write the summary in english."
+DefaultPrompt="This is a YouTube transcription text. Create a detailed, well explained summary of this transcription. Make the text look like it was written by a human. Be serious but use a casual tone, focus on the important aspects of the subjects. If the transcription has explanations on how to do something, include these explanations in the summary organized by topics. A better explained text must be prioritized over shortness. You can use bullet points in some parts if the context if it is relevant. Organize the summary in sections and add a brief title before each section. Each section can have one or more paragraphs. If people's names are mentioned in the text you must also mention the name (and the person's role/task if available) in the summary. Write the summary in english in markdown format."
 ```
 
 If the file is created automatically the `OpenAIAPIKey` value is left blank. Edit the file and add your key before running the script again.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-VERSION="1.2.0"
+VERSION="1.2.1"
 
 CONFIG_FILE="$HOME/.config/yt-summarizer.conf"
 LOG_FILE="./yt-summarizer.log"
@@ -67,7 +67,7 @@ init_config() {
   cat > "$CONFIG_FILE" <<'EOC'
 OpenAIAPIKey=
 OpenAIModel=gpt-3.5-turbo
-DefaultPrompt="This is a YouTube transcription text. Create a summary of this transcription in the language of the transcription. Make the text look like it was written by a human. Be serious but use a casual tone, focus on the important aspects of the text. Add timestamps [hh:mm] and a brief title about the paragraph subject before each paragraph. Write the summary in english."
+DefaultPrompt="This is a YouTube transcription text. Create a detailed, well explained summary of this transcription. Make the text look like it was written by a human. Be serious but use a casual tone, focus on the important aspects of the subjects. If the transcription has explanations on how to do something, include these explanations in the summary organized by topics. A better explained text must be prioritized over shortness. You can use bullet points in some parts if the context if it is relevant. Organize the summary in sections and add a brief title before each section. Each section can have one or more paragraphs. If people's names are mentioned in the text you must also mention the name (and the person's role/task if available) in the summary. Write the summary in english in markdown format."
 EOC
   echo "Configuration file created at $CONFIG_FILE"
   echo "Please edit this file and set OpenAIAPIKey before running the script again."
@@ -178,9 +178,15 @@ download_subtitles() {
     # Find the most recently created .vtt file
     local newest_file=$(ls -t *.vtt 2>/dev/null | head -1)
     if [[ -n "$newest_file" && -f "$newest_file" ]]; then
-      log "INFO" "Successfully downloaded subtitles: $newest_file"
-      echo "$newest_file"
-      return 0
+      # Check if the VTT file contains actual text
+      if grep -q -v -E '^(WEBVTT|Kind:|Language:|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} -->|^\s*$)' "$newest_file"; then
+        log "INFO" "Successfully downloaded subtitles with text: $newest_file"
+        echo "$newest_file"
+        return 0
+      else
+        log "WARN" "Downloaded subtitle file '$newest_file' appears to be empty or contain only timestamps. Discarding."
+        rm "$newest_file"
+      fi
     fi
   fi
   
@@ -276,7 +282,7 @@ jq -n \
   --arg model "$OpenAIModel" \
   --arg prompt "$DefaultPrompt" \
   --rawfile text "$sub_file" \
-  '{model:$model,messages:[{"role":"user","content":($prompt+"\n\n"+$text)}]}' \
+  '{model:$model,messages:[{"role":"user","content":("<task>" + $prompt + "</task><transcript>" + $text + "</transcript>")}]}' \
   > "$json_temp_file"
 
 log "INFO" "Sending request to OpenAI API..."
