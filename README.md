@@ -1,44 +1,104 @@
 # yt-summarizer
 
-`yt-summarizer` is a small Bash script that downloads the transcript of a YouTube video and creates a concise summary using the OpenAI API.
+A tiny Bash tool that downloads YouTube subtitles and generates a high‑quality summary using the OpenAI API.
 
-## How it works
+## Features
 
-1. The script uses `yt-dlp` to download the official subtitles in the video's language if available, otherwise it falls back to the auto-generated captions.
-2. The subtitle file (VTT) content is used as-is.
-3. The transcript is sent to the OpenAI API together with a prompt stored in the configuration file.
-4. The returned summary is saved as a time stamped text file next to the downloaded subtitle.
+- **Smart subtitle retrieval**: Prefers official subtitles; falls back to auto‑generated captions.
+- **Language handling**: Uses the detected video language; falls back to English when unknown.
+- **VTT cleaning**: Strips tags and cue settings to reduce noise and token usage.
+- **Saved artifacts**: Writes both the original and cleaned VTT files alongside the summary.
+- **Simple configuration**: Set your API key, model (default `gpt-4o-mini`), and prompt once.
+- **Convenient output**: Timestamped filenames with a sanitized video title.
+- **Optional editor opening**: Add `-e` to open the summary right away.
+- **Logging**: Detailed logs written to `./yt-summarizer.log`.
 
-## Configuration file
+## Prerequisites
 
-On the first run the script creates a configuration file at `~/.config/yt-summarizer.conf` if it does not exist. The file contains the following variables:
+- Bash (tested on Linux; macOS should work as well)
+- `yt-dlp`
+- `jq`
+- `curl`
+- An OpenAI API key
+
+## Installation
+
+1. Make the script executable:
+   ```bash
+   chmod +x yt-summarizer
+   ```
+2. Place it somewhere on your `PATH` (for example):
+   ```bash
+   sudo cp yt-summarizer /usr/local/bin/
+   ```
+
+## Configuration
+
+On the first run, the script creates `~/.config/yt-summarizer.conf` if it does not exist. It contains:
 
 - `OpenAIAPIKey` – your OpenAI API key
 - `OpenAIModel` – model name used in the API call (default `gpt-4o-mini`)
-- `DefaultPrompt` – default prompt prepended to the transcript before sending it to the API
+- `DefaultPrompt` – prompt prepended to the transcript before sending it to the API
 
 Example configuration (replace the example key with your own):
 
 ```ini
 OpenAIAPIKey=sk-proj-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
 OpenAIModel=gpt-4o-mini
-DefaultPrompt="This is a YouTube transcription text. Create a detailed, well explained summary of this transcription. Make the text look like it was written by a human. Be serious but use a casual tone, focus on the important aspects of the subjects. If the transcription has explanations on how to do something, include these explanations in the summary organized by topics. A better explained text must be prioritized over shortness. You can use bullet points in some parts if the context if it is relevant. Organize the summary in sections and add a brief title before each section. Each section can have one or more paragraphs. If people's names are mentioned in the text you must also mention the name (and the person's role/task if available) in the summary. Write the summary in english in markdown format."
+DefaultPrompt="This is a YouTube transcription. Create a detailed, well‑explained summary. Make it read naturally, with a serious yet conversational tone, focusing on the important topics. If the transcription explains how to do something, include those explanations, organized by topic. Favor clarity over brevity. Use bullet points when helpful. Organize the summary into sections with brief titles. Each section can have one or more paragraphs. If people’s names appear, include the name (and the person’s role/task if available). Write the summary in English using Markdown."
 ```
 
-If the file is created automatically the `OpenAIAPIKey` value is left blank. Edit the file and add your key before running the script again.
+If the file is created automatically, `OpenAIAPIKey` is left blank. Edit the file and add your key before running the script again.
 
 ## Usage
 
 ```bash
-$ yt-summarizer [-e] <youtube-url>
+yt-summarizer [-e] <youtube-url>
 ```
 
-The summary is written to `<sanitized video title>_YYYY-MM-DD_hh-mm-ss.txt`.
+The summary is written to:
 
-Options:
-- `-e`   Open the summary file with an editor after generation
-- `-h`   Show a short help message
-- `-v`   Print the script version
+```
+<sanitized video title>_YYYY-MM-DD_hh-mm-ss_summary.txt
+```
 
-Run `yt-summarizer -h` to show a short help message or `yt-summarizer -v` to print the script version.
+### Options
 
+- `-e` – open the summary file with an editor after generation
+- `-h` – show a short help message
+- `-v` – print the script version
+
+## Example
+
+```bash
+yt-summarizer https://www.youtube.com/watch?v=dQw4w9WgXcQ
+```
+
+Outputs (filenames include the sanitized title and a timestamp):
+
+```
+<title>_YYYY-MM-DD_hh-mm-ss_summary.txt
+<title>_YYYY-MM-DD_hh-mm-ss_original.vtt
+<title>_YYYY-MM-DD_hh-mm-ss_clean.vtt
+```
+
+## How it works
+
+1. Uses `yt-dlp` to fetch official subtitles in the video’s language; if unavailable, falls back to auto‑generated captions. If the language cannot be detected, English is used as a fallback.
+2. Cleans the downloaded VTT to remove tags and cue settings, reducing noise and token usage.
+3. Sends the cleaned transcript to the OpenAI API along with your configured prompt.
+4. Saves the returned summary as a timestamped text file next to the VTT files.
+
+## Troubleshooting
+
+- **“Failed to download any subtitles”**: The video may not have subtitles. Check what’s available:
+  ```bash
+  yt-dlp --list-subs <youtube-url>
+  ```
+- **API errors or empty responses**: Ensure your `OpenAIAPIKey` is set correctly and that your account has quota.
+- **Missing commands**: Install `yt-dlp`, `jq`, and `curl` and make sure they’re on your `PATH`.
+- **No editor opens with `-e`**: The script tries several GUI and terminal editors, then falls back to `xdg-open`. Install or configure your preferred editor.
+
+## Privacy
+
+The transcript text is sent to OpenAI to generate a summary. Avoid using this tool with sensitive content if that is a concern. Your API key is read from your local config file; it is not logged, and the config file’s permissions are restricted when created.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-VERSION="1.4.0"
+VERSION="1.5.1"
 
 CONFIG_FILE="$HOME/.config/yt-summarizer.conf"
 LOG_FILE="./yt-summarizer.log"
@@ -165,7 +165,7 @@ fi
 
 URL="$1"
 PROCESSING_STARTED="true"
-log "INFO" "Starting yt-summarizer for URL: $URL"
+log "INFO" "Starting yt-summarizer $VERSION for URL: $URL"
 
 # Ensure needed tools are available
 check_dependencies
@@ -420,7 +420,7 @@ sanitize_title() {
 
 timestamp=$(date +%F_%H-%M-%S)
 safe_title=$(sanitize_title "$title")
-output_file="${safe_title}_${timestamp}.txt"
+output_file="${safe_title}_${timestamp}_summary.txt"
 
 # Save both original and cleaned subtitles next to the summary
 subtitle_output_file_original="${safe_title}_${timestamp}_original.vtt"
