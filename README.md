@@ -102,3 +102,7 @@ Outputs (filenames include the sanitized title and a timestamp):
 ## Privacy
 
 The transcript text is sent to OpenAI to generate a summary. Avoid using this tool with sensitive content if that is a concern. Your API key is read from your local config file; it is not logged, and the config file’s permissions are restricted when created.
+
+## License
+
+MIT
