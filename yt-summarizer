@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-VERSION="1.3.1"
+VERSION="1.3.3"
 
 CONFIG_FILE="$HOME/.config/yt-summarizer.conf"
 LOG_FILE="./yt-summarizer.log"
@@ -175,8 +175,16 @@ if [[ -z "$title" ]]; then
   exit 1
 fi
 
+# Always get a stable video id for file naming and isolation
+video_id="$(yt-dlp --print '%(id)s' "$URL" 2>/dev/null)"
+if [[ -z "$video_id" ]]; then
+  log "ERROR" "Failed to get video id."
+  exit 1
+fi
+
 lang="$(yt-dlp --print '%(language)s' "$URL" 2>/dev/null)"
-if [[ -z "$lang" || "$lang" == "None" ]]; then
+# Treat unknown markers as not detected
+if [[ -z "$lang" || "$lang" == "None" || "$lang" == "NA" || "$lang" == "N/A" || "$lang" == "na" ]]; then
   lang="en"
   log "INFO" "Video language not detected, defaulting to English"
 else
@@ -185,46 +193,61 @@ fi
 
 log "INFO" "Video title: $title"
 
-# Function to try downloading subtitles
+# Create an isolated temporary directory for subtitle downloads
+subs_dir=$(mktemp -d)
+if [[ ! -d "$subs_dir" ]]; then
+  log "ERROR" "Failed to create temporary directory for subtitles"
+  exit 1
+fi
+log "INFO" "Using temporary subtitles directory: $subs_dir"
+
+# Build preferred subtitle language lists
+preferred_langs_official="${lang},${lang}.*"
+preferred_langs_auto="${lang},${lang}-orig,${lang}.*"
+
+# Function to try downloading subtitles (any language)
 download_subtitles() {
   local sub_type="$1"  # "official" or "auto"
-  local sub_lang="$2"
-  local attempt_desc="$3"
+  local attempt_desc="$2"
   
   log "INFO" "Attempting to download $attempt_desc..."
   
   # Store the count of .vtt files before download
-  local vtt_count_before=$(ls *.vtt 2>/dev/null | wc -l)
+  local vtt_count_before=$(ls "$subs_dir"/*.vtt 2>/dev/null | wc -l)
   log "INFO" "VTT files before download: $vtt_count_before"
   
   local cmd_result=0
   if [[ "$sub_type" == "official" ]]; then
-    yt-dlp --skip-download --write-sub --sub-lang "$sub_lang" --convert-subs vtt -o "%(title)s.%(ext)s" "$URL" >/dev/null 2>>"$LOG_FILE" || cmd_result=$?
+    yt-dlp \
+      --skip-download \
+      --write-sub \
+      --sub-langs "${SUB_LANGS:-$preferred_langs_official}" \
+      --sub-format "vtt/srv3" \
+      --convert-subs vtt \
+      --paths subtitle:"$subs_dir" \
+      -o "%(id)s.%(ext)s" \
+      "$URL" >/dev/null 2>>"$LOG_FILE" || cmd_result=$?
   else
-    yt-dlp --skip-download --write-auto-sub --sub-lang "$sub_lang" --convert-subs vtt -o "%(title)s.%(ext)s" "$URL" >/dev/null 2>>"$LOG_FILE" || cmd_result=$?
+    yt-dlp \
+      --skip-download \
+      --write-auto-sub \
+      --sub-langs "${SUB_LANGS:-$preferred_langs_auto}" \
+      --sub-format "vtt/srv3" \
+      --convert-subs vtt \
+      --paths subtitle:"$subs_dir" \
+      -o "%(id)s.%(ext)s" \
+      "$URL" >/dev/null 2>>"$LOG_FILE" || cmd_result=$?
   fi
   
   log "INFO" "yt-dlp command result: $cmd_result"
   
   # Check if new .vtt files were created
-  local vtt_count_after=$(ls *.vtt 2>/dev/null | wc -l)
+  local vtt_count_after=$(ls "$subs_dir"/*.vtt 2>/dev/null | wc -l)
   log "INFO" "VTT files after download: $vtt_count_after"
   
-  # If yt-dlp skipped download because file exists, prefer the expected file for this title+lang
-  local expected_file="${title}.${sub_lang}.vtt"
-  if [[ -f "$expected_file" ]]; then
-    if grep -q -v -E '^(WEBVTT|Kind:|Language:|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} -->|[[:space:]]*)$' "$expected_file"; then
-      log "INFO" "Found existing subtitle file with text: $expected_file"
-      echo "$expected_file"
-      return 0
-    else
-      log "WARN" "Existing expected subtitle file '$expected_file' seems empty or timestamps only."
-    fi
-  fi
-
   if [[ $vtt_count_after -gt $vtt_count_before ]]; then
     # Find the most recently created .vtt file
-    local newest_file=$(ls -t *.vtt 2>/dev/null | head -1)
+    local newest_file=$(ls -t "$subs_dir"/*.vtt 2>/dev/null | head -1)
     if [[ -n "$newest_file" && -f "$newest_file" ]]; then
       # Check if the VTT file contains actual text
       if grep -q -v -E '^(WEBVTT|Kind:|Language:|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} -->|[[:space:]]*)$' "$newest_file"; then
@@ -242,56 +265,33 @@ download_subtitles() {
   return 1
 }
 
-# Try to download subtitles with fallback strategy
-log "INFO" "Starting subtitle download with fallback strategy..."
+# Try to download subtitles with simplified strategy
+log "INFO" "Starting subtitle download (official first, then automatic), preferred languages..."
 
 sub_file=""
 
-# 1. Try official subtitles in video language
+# 1) Try official subtitles (any language)
 if [[ -z "$sub_file" ]]; then
-  log "INFO" "Trying attempt 1: official subtitles"
-  sub_file=$(download_subtitles "official" "$lang" "official subtitles in $lang")
-  log "INFO" "Attempt 1 result: sub_file='$sub_file'"
+  log "INFO" "Trying official subtitles (preferred languages)"
+  SUB_LANGS="$preferred_langs_official"
+  sub_file=$(download_subtitles "official" "official subtitles (preferred languages)")
+  log "INFO" "Official attempt result: sub_file='$sub_file'"
 fi
 
-# 2. Try auto-generated subtitles in preferred languages first
+# 2) Fallback: automatic subtitles (any language)
 if [[ -z "$sub_file" ]]; then
-  log "INFO" "Trying attempt 2: auto-generated English subtitles"
-  sub_file=$(download_subtitles "auto" "en" "auto-generated English subtitles")
-  log "INFO" "Attempt 2 result: sub_file='$sub_file'"
+  log "INFO" "Trying automatic subtitles (preferred languages)"
+  SUB_LANGS="$preferred_langs_auto"
+  sub_file=$(download_subtitles "auto" "automatic subtitles (preferred languages)")
+  log "INFO" "Automatic attempt result: sub_file='$sub_file'"
 fi
 
-if [[ -z "$sub_file" ]]; then
-  log "INFO" "Trying attempt 3: auto-generated Brazilian Portuguese subtitles"
-  sub_file=$(download_subtitles "auto" "pt-BR" "auto-generated Brazilian Portuguese subtitles")
-  log "INFO" "Attempt 3 result: sub_file='$sub_file'"
-fi
-
-if [[ -z "$sub_file" ]]; then
-  log "INFO" "Trying attempt 4: auto-generated European Portuguese subtitles"
-  sub_file=$(download_subtitles "auto" "pt" "auto-generated European Portuguese subtitles")
-  log "INFO" "Attempt 4 result: sub_file='$sub_file'"
-fi
-
-# 3. Try auto-generated subtitles in video language if not already tried
-if [[ -z "$sub_file" && "$lang" != "en" && "$lang" != "pt-BR" && "$lang" != "pt" ]]; then
-  log "INFO" "Trying attempt 5: auto-generated subtitles in $lang"
-  sub_file=$(download_subtitles "auto" "$lang" "auto-generated subtitles in $lang")
-  log "INFO" "Attempt 5 result: sub_file='$sub_file'"
-fi
-
-# 4. Final check - try the most recent .vtt file with text (avoid arbitrary pick)
-if [[ -z "$sub_file" ]]; then
-  log "INFO" "Checking for any available subtitle files..."
-  newest_file=$(ls -t *.vtt 2>/dev/null | head -1)
-  if [[ -n "$newest_file" && -f "$newest_file" ]]; then
-    if grep -q -v -E '^(WEBVTT|Kind:|Language:|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} -->|[[:space:]]*)$' "$newest_file"; then
-      sub_file="$newest_file"
-      log "INFO" "Using most recent subtitle file with text: $sub_file"
-    else
-      log "WARN" "Most recent subtitle file '$newest_file' seems empty or timestamps only."
-    fi
-  fi
+# 3) Fallback: automatic English subtitles explicitly (avoid requesting all languages)
+if [[ -z "$sub_file" && "$lang" != "en" ]]; then
+  log "INFO" "Trying automatic subtitles (English fallback)"
+  SUB_LANGS="en.*"
+  sub_file=$(download_subtitles "auto" "automatic subtitles (English fallback)")
+  log "INFO" "Automatic English fallback result: sub_file='$sub_file'"
 fi
 
 if [[ -z "$sub_file" || ! -f "$sub_file" ]]; then
