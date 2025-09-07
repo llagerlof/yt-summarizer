@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-VERSION="1.2.1"
+VERSION="1.3.0"
 
 CONFIG_FILE="$HOME/.config/yt-summarizer.conf"
 LOG_FILE="./yt-summarizer.log"
@@ -41,6 +41,8 @@ open_with_editor() {
   
   # Add CLI editors
   editors+=(nvim vim vi less)
+  # Fallback to system opener
+  editors+=(xdg-open)
   
   # Try each editor
   for editor in "${editors[@]}"; do
@@ -49,6 +51,9 @@ open_with_editor() {
       case "$editor" in
         less)
           "$editor" "$file"
+          ;;
+        xdg-open)
+          "$editor" "$file" >/dev/null 2>&1 &
           ;;
         *)
           "$editor" "$file" &
@@ -66,23 +71,47 @@ init_config() {
   mkdir -p "$(dirname "$CONFIG_FILE")"
   cat > "$CONFIG_FILE" <<'EOC'
 OpenAIAPIKey=
-OpenAIModel=gpt-3.5-turbo
+# Default to a widely supported chat model
+OpenAIModel=gpt-4o-mini
 DefaultPrompt="This is a YouTube transcription text. Create a detailed, well explained summary of this transcription. Make the text look like it was written by a human. Be serious but use a casual tone, focus on the important aspects of the subjects. If the transcription has explanations on how to do something, include these explanations in the summary organized by topics. A better explained text must be prioritized over shortness. You can use bullet points in some parts if the context if it is relevant. Organize the summary in sections and add a brief title before each section. Each section can have one or more paragraphs. If people's names are mentioned in the text you must also mention the name (and the person's role/task if available) in the summary. Write the summary in english in markdown format."
 EOC
   echo "Configuration file created at $CONFIG_FILE"
   echo "Please edit this file and set OpenAIAPIKey before running the script again."
+  chmod 600 "$CONFIG_FILE" 2>/dev/null || true
 }
 
-# Function to clean up temporary files
+# Function to clean up temporary files and perform finalization
 cleanup() {
   log "INFO" "Cleaning up temporary files..."
   # Keep VTT files and summary files, only clean up other temp files if any
-  # No cleanup needed since we want to preserve the VTT file
   true
 }
 
-# Set up cleanup trap
-trap cleanup EXIT
+# Consolidated EXIT trap to avoid being overwritten later
+on_exit() {
+  cleanup || true
+  # Remove temporary JSON file if it exists
+  if [[ -n "${json_temp_file:-}" && -f "${json_temp_file}" ]]; then
+    rm -f "${json_temp_file}" || true
+  fi
+}
+
+trap on_exit EXIT
+
+# Check for required external dependencies early
+check_dependencies() {
+  local missing=()
+  local deps=(yt-dlp jq curl)
+  for dep in "${deps[@]}"; do
+    if ! command -v "$dep" >/dev/null 2>&1; then
+      missing+=("$dep")
+    fi
+  done
+  if (( ${#missing[@]} > 0 )); then
+    log "ERROR" "Missing required commands: ${missing[*]}. Please install them and try again."
+    exit 1
+  fi
+}
 
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
   usage
@@ -106,6 +135,9 @@ fi
 
 URL="$1"
 log "INFO" "Starting yt-summarizer for URL: $URL"
+
+# Ensure needed tools are available
+check_dependencies
 
 if [[ ! -f "$CONFIG_FILE" ]]; then
   log "ERROR" "Config file not found, initializing..."
@@ -174,12 +206,24 @@ download_subtitles() {
   local vtt_count_after=$(ls *.vtt 2>/dev/null | wc -l)
   log "INFO" "VTT files after download: $vtt_count_after"
   
+  # If yt-dlp skipped download because file exists, prefer the expected file for this title+lang
+  local expected_file="${title}.${sub_lang}.vtt"
+  if [[ -f "$expected_file" ]]; then
+    if grep -q -v -E '^(WEBVTT|Kind:|Language:|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} -->|[[:space:]]*)$' "$expected_file"; then
+      log "INFO" "Found existing subtitle file with text: $expected_file"
+      echo "$expected_file"
+      return 0
+    else
+      log "WARN" "Existing expected subtitle file '$expected_file' seems empty or timestamps only."
+    fi
+  fi
+
   if [[ $vtt_count_after -gt $vtt_count_before ]]; then
     # Find the most recently created .vtt file
     local newest_file=$(ls -t *.vtt 2>/dev/null | head -1)
     if [[ -n "$newest_file" && -f "$newest_file" ]]; then
       # Check if the VTT file contains actual text
-      if grep -q -v -E '^(WEBVTT|Kind:|Language:|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} -->|^\s*$)' "$newest_file"; then
+      if grep -q -v -E '^(WEBVTT|Kind:|Language:|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} -->|[[:space:]]*)$' "$newest_file"; then
         log "INFO" "Successfully downloaded subtitles with text: $newest_file"
         echo "$newest_file"
         return 0
@@ -232,13 +276,17 @@ if [[ -z "$sub_file" && "$lang" != "en" && "$lang" != "pt-BR" && "$lang" != "pt"
   log "INFO" "Attempt 5 result: sub_file='$sub_file'"
 fi
 
-# 4. Final check - list all .vtt files and try to use any available
+# 4. Final check - try the most recent .vtt file with text (avoid arbitrary pick)
 if [[ -z "$sub_file" ]]; then
   log "INFO" "Checking for any available subtitle files..."
-  vtt_files=(*.vtt)
-  if [[ -f "${vtt_files[0]}" ]]; then
-    sub_file="${vtt_files[0]}"
-    log "INFO" "Found subtitle file: $sub_file"
+  newest_file=$(ls -t *.vtt 2>/dev/null | head -1)
+  if [[ -n "$newest_file" && -f "$newest_file" ]]; then
+    if grep -q -v -E '^(WEBVTT|Kind:|Language:|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} -->|[[:space:]]*)$' "$newest_file"; then
+      sub_file="$newest_file"
+      log "INFO" "Using most recent subtitle file with text: $sub_file"
+    else
+      log "WARN" "Most recent subtitle file '$newest_file' seems empty or timestamps only."
+    fi
   fi
 fi
 
@@ -275,7 +323,6 @@ log "INFO" "Creating OpenAI API request..."
 
 # Create a temporary JSON file to avoid argument list too long error
 json_temp_file=$(mktemp)
-trap "rm -f '$json_temp_file'" EXIT
 
 # Use jq to create the JSON payload and write it to a file
 jq -n \
@@ -311,8 +358,28 @@ if [[ -z "$summary" || "$summary" == "null" ]]; then
   exit 1
 fi
 
+# Sanitize the title for a safe output filename
+sanitize_title() {
+  local t="$1"
+  # Replace path separators with dashes
+  t=${t//\//-}
+  t=${t//\\/-}
+  # Replace characters that are problematic on many filesystems
+  t=${t//:/-}
+  t=${t//\*/-}
+  t=${t//\?/-}
+  t=${t//\"/-}
+  t=${t//</-}
+  t=${t//>/-}
+  t=${t//|/-}
+  # Collapse whitespace and trim
+  t=$(printf '%s' "$t" | sed 's/[[:space:]]\+/ /g; s/^ //; s/ $//')
+  printf '%s' "$t"
+}
+
 timestamp=$(date +%F_%H-%M-%S)
-output_file="${base}_${timestamp}.txt"
+safe_title=$(sanitize_title "$title")
+output_file="${safe_title}_${timestamp}.txt"
 
 echo "$summary" > "$output_file"
 log "INFO" "Summary written to: $output_file"
