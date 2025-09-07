@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-VERSION="1.3.4"
+VERSION="1.4.0"
 
 CONFIG_FILE="$HOME/.config/yt-summarizer.conf"
 LOG_FILE="./yt-summarizer.log"
@@ -116,6 +116,31 @@ check_dependencies() {
     log "ERROR" "Missing required commands: ${missing[*]}. Please install them and try again."
     exit 1
   fi
+}
+
+# Clean a VTT file to reduce token usage while keeping useful content
+# - Trims cue settings after the main timestamp (e.g., align:start position:0%)
+# - Removes all tags like <c>...</c>, <i>...</i>, <00:00:00.000>, <v Name>...
+# - Collapses repeated spaces and trims leading/trailing spaces on text lines
+clean_vtt_file() {
+  local input_file="$1"
+  local output_file="$2"
+
+  if [[ -z "$input_file" || -z "$output_file" ]]; then
+    log "ERROR" "clean_vtt_file requires input and output paths"
+    return 1
+  fi
+
+  # Use sed to:
+  # 1) Keep only the two timestamps on cue timing lines
+  # 2) Remove any tags between angle brackets
+  # 3) Trim leading/trailing whitespace and collapse multiple spaces
+  sed -E \
+    -e 's/^([0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3} --> [0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}).*/\1/' \
+    -e 's/<[^>]*>//g' \
+    -e 's/^[[:space:]]+//; s/[[:space:]]+$//' \
+    -e 's/[[:space:]]{2,}/ /g' \
+    "$input_file" > "$output_file"
 }
 
 if [[ "$1" == "-h" || "$1" == "--help" ]]; then
@@ -306,8 +331,16 @@ log "INFO" "Using subtitle file: $sub_file"
 
 base="$title"
 
-# Keep the original VTT file and send it directly to OpenAI
-log "INFO" "Using original VTT file: $sub_file"
+# Create a cleaned VTT file to reduce tokens
+log "INFO" "Cleaning VTT file before sending to OpenAI"
+clean_sub_file=$(mktemp)
+if clean_vtt_file "$sub_file" "$clean_sub_file"; then
+  :
+else
+  log "WARN" "Cleaning failed; proceeding with original VTT"
+  rm -f "$clean_sub_file" 2>/dev/null || true
+  clean_sub_file="$sub_file"
+fi
 
 # Check if VTT file is not empty
 if [[ ! -s "$sub_file" ]]; then
@@ -318,13 +351,15 @@ if [[ ! -s "$sub_file" ]]; then
 fi
 
 vtt_size=$(wc -c < "$sub_file")
-log "INFO" "VTT file size: $vtt_size characters"
+clean_vtt_size=$(wc -c < "$clean_sub_file")
+log "INFO" "Original VTT size: $vtt_size characters"
+log "INFO" "Cleaned VTT size: $clean_vtt_size characters"
 
 if [[ $vtt_size -lt 50 ]]; then
   log "WARN" "VTT file seems very short, this might indicate a problem"
 fi
 
-# Read the entire VTT file content to send to OpenAI
+# Read the cleaned VTT file content to send to OpenAI
 log "INFO" "Creating OpenAI API request..."
 
 # Create a temporary JSON file to avoid argument list too long error
@@ -334,7 +369,7 @@ json_temp_file=$(mktemp)
 jq -n \
   --arg model "$OpenAIModel" \
   --arg prompt "$DefaultPrompt" \
-  --rawfile text "$sub_file" \
+  --rawfile text "$clean_sub_file" \
   '{model:$model,messages:[{"role":"user","content":("<task>" + $prompt + "</task><transcript>" + $text + "</transcript>")}]}' \
   > "$json_temp_file"
 
@@ -387,19 +422,39 @@ timestamp=$(date +%F_%H-%M-%S)
 safe_title=$(sanitize_title "$title")
 output_file="${safe_title}_${timestamp}.txt"
 
-# Move the selected subtitle next to the summary and rename to match
-subtitle_output_file="${safe_title}_${timestamp}.vtt"
+# Save both original and cleaned subtitles next to the summary
+subtitle_output_file_original="${safe_title}_${timestamp}_original.vtt"
+subtitle_output_file_clean="${safe_title}_${timestamp}_clean.vtt"
+
 if [[ -f "$sub_file" ]]; then
-  if mv -f "$sub_file" "$subtitle_output_file" 2>>"$LOG_FILE"; then
-    sub_file="$subtitle_output_file"
-    log "INFO" "Subtitle saved to: $sub_file"
+  if mv -f "$sub_file" "$subtitle_output_file_original" 2>>"$LOG_FILE"; then
+    sub_file="$subtitle_output_file_original"
+    log "INFO" "Original subtitle saved to: $sub_file"
   else
-    # Fallback to copy in case move fails across filesystems
-    if cp -f "$sub_file" "$subtitle_output_file" 2>>"$LOG_FILE"; then
-      sub_file="$subtitle_output_file"
-      log "INFO" "Subtitle copied to: $sub_file"
+    if cp -f "$sub_file" "$subtitle_output_file_original" 2>>"$LOG_FILE"; then
+      sub_file="$subtitle_output_file_original"
+      log "INFO" "Original subtitle copied to: $sub_file"
     else
-      log "WARN" "Failed to place subtitle next to summary; original remains at: $sub_file"
+      log "WARN" "Failed to place original subtitle next to summary; original remains at: $sub_file"
+    fi
+  fi
+fi
+
+if [[ -f "$clean_sub_file" ]]; then
+  if [[ "$clean_sub_file" == "$sub_file" ]]; then
+    # Cleaning fell back to original; ensure we still have a clean-named copy
+    if cp -f "$sub_file" "$subtitle_output_file_clean" 2>>"$LOG_FILE"; then
+      log "INFO" "Clean subtitle copied to: $subtitle_output_file_clean"
+    fi
+  else
+    if mv -f "$clean_sub_file" "$subtitle_output_file_clean" 2>>"$LOG_FILE"; then
+      log "INFO" "Clean subtitle saved to: $subtitle_output_file_clean"
+    else
+      if cp -f "$clean_sub_file" "$subtitle_output_file_clean" 2>>"$LOG_FILE"; then
+        log "INFO" "Clean subtitle copied to: $subtitle_output_file_clean"
+      else
+        log "WARN" "Failed to place cleaned subtitle next to summary"
+      fi
     fi
   fi
 fi
@@ -408,6 +463,7 @@ echo "$summary" > "$output_file"
 log "INFO" "Summary written to: $output_file"
 
 echo "Original VTT file: $sub_file"
+echo "Cleaned VTT file: $subtitle_output_file_clean"
 echo "Summary written to $output_file"
 log "INFO" "yt-summarizer completed successfully"
 
